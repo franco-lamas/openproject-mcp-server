@@ -27,8 +27,11 @@ class OpenProjectClient:
         self.status_cache: Dict[str, str] = {}
         self.priority_cache: Dict[str, str] = {}
 
-    async def startup(self):
-        """Initialize the persistent connection pool."""
+    async def _ensure_client(self):
+        """Lazy initialization of the persistent connection pool."""
+        if self.client:
+            return
+            
         api_token = OPENPROJECT_API_KEY.replace("apikey:", "")
         self.client = httpx.AsyncClient(
             base_url=f"{OPENPROJECT_HOST}/api/v3",
@@ -38,16 +41,12 @@ class OpenProjectClient:
             headers={"Content-Type": "application/json"}
         )
         logger.info(f"Connected to OpenProject at {OPENPROJECT_HOST}")
-        # Proactive metadata caching (optional, could be lazy)
+        
+        # Lazy metadata caching
         try:
             await self._refresh_metadata_cache()
         except Exception as e:
-            logger.warning(f"Could not pre-fetch metadata: {e}")
-
-    async def shutdown(self):
-        """Close the connection pool safely."""
-        if self.client:
-            await self.client.aclose()
+            logger.warning(f"Could not fetch metadata: {e}")
 
     async def _refresh_metadata_cache(self):
         """Cache common resource HREFs to minimize future API calls."""
@@ -65,8 +64,7 @@ class OpenProjectClient:
 
     async def request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
         """Wrapper for httpx requests with error handling."""
-        if not self.client:
-            raise RuntimeError("Client not initialized. Call startup() first.")
+        await self._ensure_client()
         
         response = await self.client.request(method, path, **kwargs)
         if response.status_code >= 400:
@@ -74,16 +72,8 @@ class OpenProjectClient:
             response.raise_for_status()
         return response.json()
 
-# Global client instance managed by MCP lifecycle
+# Global client instance
 op_client = OpenProjectClient()
-
-@mcp.on_startup()
-async def on_startup():
-    await op_client.startup()
-
-@mcp.on_shutdown()
-async def on_shutdown():
-    await op_client.shutdown()
 
 # --- Tools ---
 
