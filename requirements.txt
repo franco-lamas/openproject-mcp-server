@@ -1,5 +1,9 @@
-mcp[cli]>=1.0.0
-httpx>=0.27.0
-python-dotenv>=1.0.1
-fastapi>=0.109.0
-uvicorn>=0.27.0
+fastapi
+uvicorn
+httpx
+python-dotenv
+mcp[cli]
+pydantic
+pytest
+pytest-asyncio
+pytest-mock

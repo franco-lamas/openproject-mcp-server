@@ -1,6 +1,7 @@
 # OpenProject MCP Server 🚀
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](CHANGELOG.md)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-1.0.0-orange.svg)](https://modelcontextprotocol.io/)
 
@@ -27,6 +28,10 @@ A professional [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 
 | `search_global` | Global search across all work packages. |
 | `add_work_package_comment` | Add a comment to a work package. |
 | `list_work_package_activities` | View full history and comments of a task. |
+| `list_wiki_pages` | List all wiki pages in a project. |
+| `get_wiki_page` | Read content and metadata of a wiki page. |
+| `create_wiki_page` | Create new wiki documentation. |
+| `update_wiki_page` | Update existing wiki content. |
 
 ## 🚀 Quick Start
 

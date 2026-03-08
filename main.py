@@ -62,6 +62,12 @@ class OpenProjectClient:
             for p in resp.json().get("_embedded", {}).get("elements", []):
                 self.priority_cache[p["name"].lower()] = p["_links"]["self"]["href"]
 
+        # Cache Statuses
+        resp = await self.client.get("statuses")
+        if resp.status_code == 200:
+            for s in resp.json().get("_embedded", {}).get("elements", []):
+                self.status_cache[s["name"].lower()] = s["_links"]["self"]["href"]
+
     async def request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
         """Wrapper for httpx requests with error handling."""
         await self._ensure_client()
@@ -80,7 +86,7 @@ class OpenProjectClient:
 op_client = OpenProjectClient()
 
 # --- FastAPI Setup ---
-app = FastAPI(title="OpenProject API Wrapper", version="1.0.0")
+app = FastAPI(title="OpenProject API Wrapper", version="1.1.0")
 mcp = FastMCP("OpenProject")
 
 # --- Models ---
@@ -96,6 +102,15 @@ class WorkPackageUpdate(BaseModel):
     description: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[str] = None
+    lock_version: int
+
+class WikiPageCreate(BaseModel):
+    project_id: str
+    title: str
+    content: str
+
+class WikiPageUpdate(BaseModel):
+    content: str
     lock_version: int
 
 # --- Shared Logic / Tools ---
@@ -130,15 +145,29 @@ async def update_work_package(wp_id: str, wp: WorkPackageUpdate):
         if wp.description:
             payload["description"] = {"raw": wp.description}
         
+        # Links preparation
+        links = {}
+        
         # Priority resolution
         if wp.priority:
             priority_href = op_client.priority_cache.get(wp.priority.lower())
             if not priority_href:
-                # Fallback: Refresh cache and try again or use ID
                 await op_client._refresh_metadata_cache()
-                priority_href = op_client.priority_cache.get(wp.priority.lower(), "/api/v3/priorities/1")
-            payload["_links"] = payload.get("_links", {})
-            payload["_links"]["priority"] = {"href": priority_href}
+                priority_href = op_client.priority_cache.get(wp.priority.lower())
+            if priority_href:
+                links["priority"] = {"href": priority_href}
+
+        # Status resolution
+        if wp.status:
+            status_href = op_client.status_cache.get(wp.status.lower())
+            if not status_href:
+                await op_client._refresh_metadata_cache()
+                status_href = op_client.status_cache.get(wp.status.lower())
+            if status_href:
+                links["status"] = {"href": status_href}
+        
+        if links:
+            payload["_links"] = links
 
         result = await op_client.request("PATCH", f"work_packages/{wp_id}", json=payload)
         return {"message": "Updated successfully", "id": result['id'], "lockVersion": result['lockVersion']}
@@ -251,6 +280,62 @@ async def add_work_package_comment(wp_id: str, comment: str):
         payload = {"comment": {"raw": comment}}
         result = await op_client.request("POST", f"work_packages/{wp_id}/activities", json=payload)
         return {"message": "Comment added successfully", "id": result.get("id")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Wiki Tools ---
+
+@mcp.tool()
+@app.get("/projects/{project_id}/wiki_pages")
+async def list_wiki_pages(project_id: str):
+    """Lists all wiki pages for a specific project."""
+    try:
+        data = await op_client.request("GET", f"projects/{project_id}/wiki_pages")
+        return data.get("_embedded", {}).get("elements", [])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@mcp.tool()
+@app.get("/wiki_pages/{page_id}")
+async def get_wiki_page(page_id: str):
+    """Fetches details and content of a specific wiki page."""
+    try:
+        data = await op_client.request("GET", f"wiki_pages/{page_id}")
+        return {
+            "id": data.get("id"),
+            "title": data.get("title"),
+            "content": data.get("text", {}).get("raw", ""),
+            "lockVersion": data.get("lockVersion"),
+            "project": data.get("_links", {}).get("project", {}).get("title")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@mcp.tool()
+@app.post("/projects/{project_id}/wiki_pages")
+async def create_wiki_page(page: WikiPageCreate):
+    """Creates a new wiki page in a project."""
+    try:
+        payload = {
+            "title": page.title,
+            "text": {"raw": page.content}
+        }
+        result = await op_client.request("POST", f"projects/{page.project_id}/wiki_pages", json=payload)
+        return {"message": "Wiki page created", "id": result.get("id"), "title": result.get("title")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@mcp.tool()
+@app.patch("/wiki_pages/{page_id}")
+async def update_wiki_page(page_id: str, page: WikiPageUpdate):
+    """Updates an existing wiki page. Requires lock_version."""
+    try:
+        payload = {
+            "text": {"raw": page.content},
+            "lockVersion": page.lock_version
+        }
+        result = await op_client.request("PATCH", f"wiki_pages/{page_id}", json=payload)
+        return {"message": "Wiki page updated", "id": result.get("id"), "lockVersion": result.get("lockVersion")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
