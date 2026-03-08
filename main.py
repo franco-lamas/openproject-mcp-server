@@ -86,7 +86,7 @@ class OpenProjectClient:
 op_client = OpenProjectClient()
 
 # --- FastAPI Setup ---
-app = FastAPI(title="OpenProject API Wrapper", version="1.1.0")
+app = FastAPI(title="OpenProject API Wrapper", version="1.2.0")
 mcp = FastMCP("OpenProject")
 
 # --- Models ---
@@ -111,6 +111,13 @@ class WikiPageCreate(BaseModel):
 
 class WikiPageUpdate(BaseModel):
     content: str
+    lock_version: int
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    active: Optional[bool] = None
+    status: Optional[str] = None
     lock_version: int
 
 # --- Shared Logic / Tools ---
@@ -201,6 +208,26 @@ async def get_project_details(project_id_or_identifier: str):
             "active": data.get("active"),
             "parent": data.get("_links", {}).get("parent", {}).get("title", "None")
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@mcp.tool()
+@app.patch("/projects/{project_id_or_identifier}")
+async def update_project(project_id_or_identifier: str, project: ProjectUpdate):
+    """Updates an existing project. Requires lock_version."""
+    try:
+        payload = {"lockVersion": project.lock_version}
+        if project.name:
+            payload["name"] = project.name
+        if project.description:
+            payload["description"] = {"raw": project.description}
+        if project.active is not None:
+            payload["active"] = project.active
+        if project.status:
+            payload["status"] = project.status
+
+        result = await op_client.request("PATCH", f"projects/{project_id_or_identifier}", json=payload)
+        return {"message": "Project updated", "id": result.get("id"), "name": result.get("name")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

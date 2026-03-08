@@ -1,7 +1,7 @@
 ---
 name: openproject-mcp-manager
 description: Use this skill to manage OpenProject resources including projects, work packages, comments, and wiki documentation through the OpenProject MCP server.
-version: 1.1.0
+version: 1.2.0
 ---
 
 # OpenProject MCP Skill 🚀
