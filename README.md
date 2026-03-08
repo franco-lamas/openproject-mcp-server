@@ -1,45 +1,47 @@
 # OpenProject MCP Server 🚀
 
-A generic [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides a seamless interface to **OpenProject API v3**. This server allows AI agents (like Claude) to interact with your OpenProject instances to manage projects, work packages, and roadmaps.
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Model Context Protocol](https://img.shields.io/badge/MCP-1.0.0-orange.svg)](https://modelcontextprotocol.io/)
+
+A professional [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides a robust interface to **OpenProject API v3**. Manage your projects, work packages, and activities directly through AI agents like Claude.
 
 ## ✨ Features
 
-- **Project Management**: List all projects, subprojects, and get detailed metadata.
-- **Work Package Operations**: Create, update, and search for tasks, bugs, and milestones.
-- **Roadmap Access**: Query project versions and milestones.
-- **Hierarchical Support**: Navigate complex project structures (like parent-child relationships).
-- **Docker-Ready**: Easy deployment using Docker or Docker Compose.
-- **Security**: Environment variable configuration for sensitive API tokens.
+- 🛠️ **Full Work Package Lifecycle**: Create, list, search, and **update** work packages.
+- 💬 **Activity Support**: List activities and add comments to any work package.
+- 🏢 **Multi-Project Management**: Explore project hierarchies and subprojects.
+- 🚀 **Dual Interface**: Seamlessly switch between **MCP (stdio)** and **FastAPI (REST)** modes.
+- 🔒 **Secure**: Environment-based configuration with TLS verification support.
 
-## 🛠️ Configuration
+## 🛠️ MCP Tools Available
 
-The server requires the following environment variables:
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List projects and subprojects. |
+| `get_project_details` | Fetch full project metadata. |
+| `list_work_packages` | List tasks/packages in a project with status filters. |
+| `get_work_package_details` | Get detailed information including `lockVersion`. |
+| `create_work_package` | Create new work packages (Tasks, Milestones, etc). |
+| `update_work_package` | Update subject, description, or priority. |
+| `search_global` | Global search across all work packages. |
+| `add_work_package_comment` | Add a comment to a work package. |
+| `list_work_package_activities` | View full history and comments of a task. |
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `OPENPROJECT_HOST` | Your OpenProject instance URL | `http://localhost:8080` |
-| `OPENPROJECT_API_KEY` | Your API Token (Access Token) | `apikey:your_token_here` |
-| `OPENPROJECT_TLS_VERIFY` | Verify SSL certificates (True/False) | `True` |
+## 🚀 Quick Start
 
-## 🚀 Quick Start (Docker)
+### 🐳 Docker (Recommended)
 
-1. Clone the repository:
+1. Build the image:
    ```bash
-   git clone https://github.com/your-username/openproject-mcp-server.git
-   cd openproject-mcp-server
+   docker build -t openproject-mcp .
    ```
-2. Configure your environment:
+2. Run as API:
    ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
-3. Run with Docker:
-   ```bash
-   docker build -t openproject-mcp-server .
-   docker run -i --rm --env-file .env openproject-mcp-server
+   docker run -d -p 8000:8000 --env-file .env openproject-mcp
    ```
 
-## 🤖 Usage with Claude Desktop
+### 🤖 Integration with Claude Desktop
 
 Add this to your `claude_desktop_config.json`:
 
@@ -49,17 +51,21 @@ Add this to your `claude_desktop_config.json`:
     "openproject": {
       "command": "docker",
       "args": [
-        "run",
-        "-i",
-        "--rm",
-        "--env-file",
-        "/path/to/your/openproject-mcp-server/.env",
-        "openproject-mcp-server"
+        "run", "-i", "--rm", "--network=host",
+        "--env-file", "/absolute/path/to/.env",
+        "openproject-mcp", "mcp"
       ]
     }
   }
 }
 ```
+
+## ⚙️ Configuration
+
+Create a `.env` file based on `.env.example`:
+- `OPENPROJECT_HOST`: Your instance URL (e.g., `https://myproject.openproject.com`)
+- `OPENPROJECT_API_KEY`: Your API key (v3)
+- `OPENPROJECT_TLS_VERIFY`: Set to `False` for self-signed certs.
 
 ## 📄 License
 MIT License.

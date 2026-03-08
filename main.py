@@ -5,6 +5,8 @@ import httpx
 from typing import Optional, List, Dict, Any, Union
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
 
 # --- Configuration ---
 load_dotenv()
@@ -14,11 +16,9 @@ VERIFY_SSL = os.getenv("OPENPROJECT_TLS_VERIFY", "True").lower() == "true"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL))
-logger = logging.getLogger("openproject-mcp")
+logger = logging.getLogger("openproject-api")
 
-# --- Server Initialization ---
-mcp = FastMCP("OpenProject")
-
+# --- OpenProject Client ---
 class OpenProjectClient:
     """Optimized client for OpenProject API v3 with connection pooling and caching."""
     def __init__(self):
@@ -66,6 +66,10 @@ class OpenProjectClient:
         """Wrapper for httpx requests with error handling."""
         await self._ensure_client()
         
+        # Handle the case where json_data is passed (legacy from previous version)
+        if "json_data" in kwargs:
+            kwargs["json"] = kwargs.pop("json_data")
+
         response = await self.client.request(method, path, **kwargs)
         if response.status_code >= 400:
             logger.error(f"API Error ({response.status_code}): {response.text}")
@@ -75,82 +79,130 @@ class OpenProjectClient:
 # Global client instance
 op_client = OpenProjectClient()
 
-# --- Tools ---
+# --- FastAPI Setup ---
+app = FastAPI(title="OpenProject API Wrapper", version="1.0.0")
+mcp = FastMCP("OpenProject")
+
+# --- Models ---
+class WorkPackageCreate(BaseModel):
+    project_id: str
+    subject: str
+    description: str = ""
+    work_package_type: str = "Task"
+    priority: str = "Normal"
+
+class WorkPackageUpdate(BaseModel):
+    subject: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    lock_version: int
+
+# --- Shared Logic / Tools ---
 
 @mcp.tool()
-async def list_projects(parent_id: Optional[str] = None) -> str:
-    """
-    Lists projects. If parent_id is provided, lists subprojects.
-    Returns a formatted list of Project names, IDs, and identifiers.
-    """
+@app.get("/work_packages/{wp_id}")
+async def get_work_package_details(wp_id: str):
+    """Fetches full details of a specific work package."""
+    try:
+        data = await op_client.request("GET", f"work_packages/{wp_id}")
+        return {
+            "id": data.get("id"),
+            "lockVersion": data.get("lockVersion"),
+            "subject": data.get("subject"),
+            "description": data.get("description", {}).get("raw", ""),
+            "status": data.get("_links", {}).get("status", {}).get("title"),
+            "priority": data.get("_links", {}).get("priority", {}).get("title"),
+            "type": data.get("_links", {}).get("type", {}).get("title")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@mcp.tool()
+@app.patch("/work_packages/{wp_id}")
+async def update_work_package(wp_id: str, wp: WorkPackageUpdate):
+    """Updates an existing work package. Requires lock_version for optimistic locking."""
+    try:
+        payload = {"lockVersion": wp.lock_version}
+        
+        if wp.subject:
+            payload["subject"] = wp.subject
+        if wp.description:
+            payload["description"] = {"raw": wp.description}
+        
+        # Priority resolution
+        if wp.priority:
+            priority_href = op_client.priority_cache.get(wp.priority.lower())
+            if not priority_href:
+                # Fallback: Refresh cache and try again or use ID
+                await op_client._refresh_metadata_cache()
+                priority_href = op_client.priority_cache.get(wp.priority.lower(), "/api/v3/priorities/1")
+            payload["_links"] = payload.get("_links", {})
+            payload["_links"]["priority"] = {"href": priority_href}
+
+        result = await op_client.request("PATCH", f"work_packages/{wp_id}", json=payload)
+        return {"message": "Updated successfully", "id": result['id'], "lockVersion": result['lockVersion']}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@mcp.tool()
+@app.get("/projects")
+async def list_projects(parent_id: Optional[str] = None):
+    """Lists projects. If parent_id is provided, lists subprojects."""
     params = {}
     if parent_id:
         params["filters"] = json.dumps([{"parent": {"operator": "=", "values": [parent_id]}}])
     
     try:
         data = await op_client.request("GET", "projects", params=params)
-        elements = data.get("_embedded", {}).get("elements", [])
-        if not elements:
-            return "No projects found."
-        
-        lines = []
-        for p in elements:
-            lines.append(f"• {p['name']} (ID: {p['id']}, Identifier: {p['identifier']})")
-        return "\n".join(lines)
+        return data.get("_embedded", {}).get("elements", [])
     except Exception as e:
-        return f"Error listing projects: {str(e)}"
+        raise HTTPException(status_code=500, detail=str(e))
 
 @mcp.tool()
-async def get_project_details(project_id_or_identifier: str) -> str:
-    """Fetches full details of a project, including description and status."""
+@app.get("/projects/{project_id_or_identifier}")
+async def get_project_details(project_id_or_identifier: str):
+    """Fetches full details of a project."""
     try:
         data = await op_client.request("GET", f"projects/{project_id_or_identifier}")
-        # Clean up for LLM readability
-        details = {
+        return {
             "name": data.get("name"),
             "identifier": data.get("identifier"),
             "description": data.get("description", {}).get("raw", ""),
             "active": data.get("active"),
             "parent": data.get("_links", {}).get("parent", {}).get("title", "None")
         }
-        return json.dumps(details, indent=2)
     except Exception as e:
-        return f"Error getting project details: {str(e)}"
+        raise HTTPException(status_code=500, detail=str(e))
 
 @mcp.tool()
-async def create_work_package(
-    project_id: str,
-    subject: str,
-    description: str = "",
-    work_package_type: str = "Task",
-    priority: str = "Normal"
-) -> str:
-    """
-    Creates a new work package (Task, Milestone, Bug, etc.) in a specific project.
-    """
+@app.post("/work_packages")
+async def create_work_package(wp: WorkPackageCreate):
+    """Creates a new work package."""
     try:
         # Resolve Type and Priority from cache or fallback
-        type_href = op_client.type_cache.get(work_package_type.lower(), "/api/v3/types/1")
-        priority_href = op_client.priority_cache.get(priority.lower(), "/api/v3/priorities/1")
+        type_href = op_client.type_cache.get(wp.work_package_type.lower(), "/api/v3/types/1")
+        priority_href = op_client.priority_cache.get(wp.priority.lower(), "/api/v3/priorities/1")
 
         payload = {
-            "subject": subject,
-            "description": {"raw": description},
+            "subject": wp.subject,
+            "description": {"raw": wp.description},
             "_links": {
-                "project": {"href": f"/api/v3/projects/{project_id}"},
+                "project": {"href": f"/api/v3/projects/{wp.project_id}"},
                 "type": {"href": type_href},
                 "priority": {"href": priority_href}
             }
         }
         
-        result = await op_client.request("POST", "work_packages", json_data=payload)
-        return f"✅ Success! Created {work_package_type} '{subject}' with ID #{result['id']}."
+        result = await op_client.request("POST", "work_packages", json=payload)
+        return {"message": "Success", "id": result['id'], "subject": wp.subject}
     except Exception as e:
-        return f"Error creating work package: {str(e)}"
+        raise HTTPException(status_code=500, detail=str(e))
 
 @mcp.tool()
-async def list_work_packages(project_id: str, status: Optional[str] = None) -> str:
-    """Lists work packages for a specific project, optionally filtered by status name."""
+@app.get("/work_packages")
+async def list_work_packages(project_id: str, status: Optional[str] = None):
+    """Lists work packages for a specific project."""
     try:
         filters = [{"project": {"operator": "=", "values": [project_id]}}]
         if status:
@@ -158,38 +210,58 @@ async def list_work_packages(project_id: str, status: Optional[str] = None) -> s
         
         params = {"filters": json.dumps(filters)}
         data = await op_client.request("GET", "work_packages", params=params)
-        elements = data.get("_embedded", {}).get("elements", [])
-        
-        if not elements:
-            return f"No work packages found for project {project_id}."
-        
-        lines = [f"Work Packages for Project {project_id}:"]
-        for wp in elements:
-            lines.append(f"  #{wp['id']} [{wp['_links']['type']['title']}] {wp['subject']} (Status: {wp['_links']['status']['title']})")
-        return "\n".join(lines)
+        return data.get("_embedded", {}).get("elements", [])
     except Exception as e:
-        return f"Error listing work packages: {str(e)}"
+        raise HTTPException(status_code=500, detail=str(e))
 
 @mcp.tool()
-async def search_global(query: str) -> str:
-    """Searches for work packages matching a query string across all projects."""
+@app.get("/search")
+async def search_global(query: str):
+    """Searches for work packages matching a query string."""
     try:
-        # Using the native search filter
         filters = [{"subject": {"operator": "~", "values": [query]}}]
         params = {"filters": json.dumps(filters)}
         data = await op_client.request("GET", "work_packages", params=params)
-        elements = data.get("_embedded", {}).get("elements", [])
-        
-        if not elements:
-            return f"No matches found for '{query}'."
-        
-        lines = [f"Search results for '{query}':"]
-        for wp in elements:
-            proj = wp['_links']['project']['title']
-            lines.append(f"  #{wp['id']} {wp['subject']} (Project: {proj})")
-        return "\n".join(lines)
+        return data.get("_embedded", {}).get("elements", [])
     except Exception as e:
-        return f"Error during search: {str(e)}"
+        raise HTTPException(status_code=500, detail=str(e))
 
+@mcp.tool()
+@app.get("/work_packages/{wp_id}/activities")
+async def list_work_package_activities(wp_id: str):
+    """Fetches all activities (comments, changes) for a specific work package."""
+    try:
+        data = await op_client.request("GET", f"work_packages/{wp_id}/activities")
+        activities = []
+        for activity in data.get("_embedded", {}).get("elements", []):
+            activities.append({
+                "comment": activity.get("comment", {}).get("raw", ""),
+                "author": activity.get("_links", {}).get("author", {}).get("title"),
+                "createdAt": activity.get("createdAt")
+            })
+        return activities
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@mcp.tool()
+@app.post("/work_packages/{wp_id}/activities")
+async def add_work_package_comment(wp_id: str, comment: str):
+    """Adds a new comment (activity) to a specific work package."""
+    try:
+        payload = {"comment": {"raw": comment}}
+        result = await op_client.request("POST", f"work_packages/{wp_id}/activities", json=payload)
+        return {"message": "Comment added successfully", "id": result.get("id")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Entry point differentiation
 if __name__ == "__main__":
-    mcp.run()
+    import uvicorn
+    import sys
+    
+    # If run with 'mcp-mode' or similar, we could run the MCP stdio
+    # But for a standard 'python main.py', let's default to the web server
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        mcp.run()
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -14,13 +14,17 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
-# Copy application code
+# Use application code
 COPY main.py .
 
-# Standard environment variables (can be overridden)
+# Standard environment variables
 ENV OPENPROJECT_HOST=http://localhost:8080
 ENV OPENPROJECT_TLS_VERIFY=True
 ENV LOG_LEVEL=INFO
 
-# Run the server using stdio transport
+# Expose the API port
+EXPOSE 8000
+
+# Run the server (defaults to FastAPI web server)
+# To run as MCP, override command to: ["python", "main.py", "mcp"]
 ENTRYPOINT ["python", "main.py"]
