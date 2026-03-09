@@ -13,6 +13,7 @@ This skill enables interaction with an OpenProject instance via its MCP server. 
 ### 🏢 Project Management
 - **List Projects**: Use `list_projects` to explore hierarchies.
 - **Project Details**: Use `get_project_details` for specific metadata.
+- **Update Projects**: Use `update_project` to modify name, description, active status, or textual status. Requires `lock_version`.
 
 ### 📝 Work Packages (Tasks)
 - **Lifecycle**: Create (`create_work_package`), search (`search_global`), and read (`list_work_packages`).
